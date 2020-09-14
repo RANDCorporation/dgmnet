@@ -1,0 +1,321 @@
+---
+title: "NDSSL ERGM"
+author: "Ben Gibson"
+date: "8/20/2020"
+output: html_document
+---
+
+## Key Insights
+* NDSSL differs from "traditional" social networks in certain ways, which has consequences for modeling. 
+  + Most social networks (friendship, sexual contacts) have bandwidth constraints on degree (see the intuition behind "Dunbar's number"), setting an upper limit on degree as the population size gets larger. In most networks, density declines as population increases. With NDSSL, bandwidth constraints are much lower, allowing degree to scale with population size more freely than in friendship or sexual contact networks (SCNs). 
+  + In sexual contact networks specifically, triangles are very rare, and degree is very low on average. Triangles are constrained in SCNs due most partnerships being composed of different-sex endpoints, making triangles impossible. Even with same-sex partnerships where triangles are possible, norms prevent this in most cases. ERGM has had a lot of success modeling SCNs, but it is not of much use to us here.
+  + Being a co-location contact network, the NDSSL domain forces most ties to be a part of a triangle in instantaneous time. The only cases where ties would not form a triangle are if only two people are in a location at one time, or an intermediary node *j* is in-between two other nodes *i* and *k* while *i* and *k* are outside of the distance threshold required for a tie to be counted.
+  + Suppose node *i* wakes up at home, goes to work, and comes home after work. The home and work networks are complete, i.e., everyone is tied to everyone else (assuming they all share the same sublocation). This creates a lot of triangles both at home and at work, but none in-between home and work. Each non-$i$ node at home has exactly one shared partner with all non-i nodes at i's work. Triangle formation is thus uneven: the number of shared partners has an uneven effect on edge probabilities for those connected to *i*.
+
+* Consequences for modeling NDSSL: 
+  + High average degree makes a snowball sample scale very fast. After three waves using just 10 seeds, the number of nodes in the final sample is over 4000. 
+  + Triangles are a primary source of degeneracy for ERGMs. In the ERGM applied to NDSSL, the model has a hard time distinguishing between ties that occurred at the same time (which are most/all part of a triangle) and ties that occurred apart from time (not triangles). This lopsided distribution likely makes the ERGM parameter estimation procedure oscillate between too many and too few triangles. 
+
+* Limits of sampling 
+  + By design, egocentric sampling, local neighborhood sampling, and snowball sampling leave out structural information in the network (e.g., shared partnerships, the number of potential edges, etc) that is important for accurate parameter estimates. All three are inadequete to model the NDSSL without additional controls that account for sampling structure. 
+  + Usually, these additional controls involve either limiting the parameter estimation procedure to consider only those edge variables with which we have complete information (such as in Stivala et al 2016), or using some type of Horvitz-Thompson estimator to estimate individual-level node statistics that can be input as target statistics (insight drawn from Gile and Handcock's papers on network inference from respondent-drive sampling). 
+
+* Conclusion for this workflow
+  + Here, I follow a workflow that leads to the conclusion that because of the lopsided nature of triangle formation in the NDSSL, the ERGM estimation procedure will probably always fail without additional constraints on location or time. 
+
+* Potential solutions 
+  + Additional constraints on location (such as modeling the network as bipartite)
+  + Constraints on edge triangles, such as not considering a different-purpose tie as counting toward a "shared partner"
+  + Constraints on time (longitudinal network modeling of a sample using DNR or STERGM)
+
+
+## Introduction 
+
+This is a first-cut attempt to fit an ERGM to the NDSSL data set. ERGMs are a link-prediction method that is designed to predict an observed network, also called a graph, using one or more input variables supplied by a user. The observed graph is compared with all possible graphs using the same node set, and an optimal combination of varaible parameters is found that best produces the observed graph. 
+
+The computational feasiblity of such a procedure breaks down at about 10000 or so individuals (nodes) in the network. Fitting to the NDSSL, with its 1.6 million nodes, is thus intractable using modern computers. Here, I use a few different sampling techniques to try to fit an ERGM with reasonable parameters that can be used to simualte the NDSSL for flu prediction. 
+
+## Egocentric Sampling
+
+We first try egocentric sampling. These are "star samples" that pull in all ties belonging to 100 nodes in the network. 
+
+```{r starsamples, include=T}
+library(parallel)
+suppressPackageStartupMessages(library(statnet))
+#edgelist<-read.csv("NDSSL data/raw/edge_list.csv",header=T)
+#nodes<-read.csv("NDSSL data/raw/node_attributes.csv",header=T)
+#edgeatts<-read.csv("NDSSL data/raw/edge_attributes.csv",header=T)
+#locations<-read.csv("NDSSL data/locations-portland-1-v2/location.Id.lookup.csv")
+#save.image(file="NDSSL.Rdata")
+
+load("NDSSL.Rdata")
+chk<-(table(c(edgeatts$person_id1,edgeatts$person_id2))) #get degrees of the entire network 
+
+nodes_sample<-sample(nodes$person_id,100,replace=F)
+edgeatts_sample<-edgeatts[which(edgeatts$person_id1%in%nodes_sample | edgeatts$person_id2%in%nodes_sample),]
+nodeatts_sample<-nodes[which(nodes$person_id%in%c(edgeatts_sample$person_id1,edgeatts_sample$person_id2)),]
+
+#Get new node ids, for statnet to better handle them. 
+levs<-levels(as.factor(unique(c(edgeatts_sample$person_id1,edgeatts_sample$person_id2))))
+edgeatts_sample$person_id1<-as.numeric(factor(edgeatts_sample$person_id1,levels=levs))
+edgeatts_sample$person_id2<-as.numeric(factor(edgeatts_sample$person_id2,levels=levs))
+nodeatts_sample$person_id_fac<-as.numeric(factor(nodeatts_sample$person_id,levels=levs))
+nodeatts_sample<-nodeatts_sample[order(nodeatts_sample$person_id_fac),]
+
+net_star_sample<-as.network(edgeatts_sample[,1:2],directed=F)
+for (i in 3:ncol(edgeatts_sample)) set.edge.attribute(net_star_sample,names(edgeatts_sample)[i],edgeatts_sample[,i])
+for (i in 1:ncol(nodeatts_sample)) set.vertex.attribute(net_star_sample,names(nodeatts_sample)[i],nodeatts_sample[,i])
+
+list.edge.attributes(net_star_sample)
+list.vertex.attributes(net_star_sample)
+mod1<-ergm(net_star_sample~edges+nodematch("household_id")+
+             nodematch("zipcode")+nodematch("gender")+absdiff("age", pow=1)+
+             nodecov("household_size")+absdiff("household_income",pow=.5)+
+             nodematch("worker")+nodecov("household_vehicles"))
+summary(mod1)
+```
+
+The model fits, and we see substantial connectivity by household and zipcode, which more or less offsets the very low baseline probability that two nodes are connected ("edges"). Having less of an impact are homophily in age, income, and worker status; high individual-level household size decreases those individuals' degree for some reason. There is no measured homophily by gender in this model.
+
+The null versus residual deviance looks impressive. Let's see if we can reproduce a basic metic, the degree distribution: 
+
+```{r starsamples_degree, include=T}
+ks.test((chk),degree(simulate(mod1,nsim=1),gmode="graph"))
+
+plot(density(chk),ylim=c(0,.5),xlim=c(0,50),main="Degree Distribution Comparison",xlab="Degree")
+lines(density((degree(net_star_sample,gmode="graph"))),col="darkgray",lwd=2)
+for (i in 1:1) lines(density(degree(simulate(mod1,nsim=1),gmode="graph")),col="purple")
+legend(20,.4,legend=c("NDSSL","Input Graph (Star Samples)","ERGM Simulation"),lwd=c(1,2,1),col=c(1,"darkgray","purple"))
+```
+
+A simulation from this model reproduces the degree distribution okay, but only of the input graph. The sampling technique we use here does not carry over enough network structure to be able to reproduce the entire NDSSL network. In retrospect this is expected: the ergm can at best reproduce the graph it sees. Star samples include many nodes with only one tie due to star-sampling structure (only observing a node's connection to the original sample of nodes). Since much of the network structure is unobserved, the model has a hard time guessing what the larger network could look like.
+
+## Local Neighborhood
+
+Second, we try sampling local neighborhoods, where we sample 100 egos but also include the ties between their alters. This captures more of the structure of the network, which I show below.
+
+```{r pressure, include=T}
+
+seeds<-sample(nodes$person_id,100) #seed sample
+seednets<-mclapply(seeds, function(x) edgeatts[which(edgeatts$person_id1%in%x | edgeatts$person_id2%in%x),],mc.cores=4)
+seednets_neighborhood<-mclapply(seednets,function(x) {
+  seed_endpts<-unique(c(x$person_id1,x$person_id2)) #grab all nodes in edgelist
+  ind<-cbind((edgeatts[,1]%in%seed_endpts),(edgeatts[,2]%in%seed_endpts)) #index edges where both endpoints include a node above 
+  ind<-which(rowSums(ind)==2) #index edges where both endpoints include a node above 
+  edgeatts[ind,]
+},mc.cores=4
+)
+seedneighs<-do.call(rbind.data.frame,seednets_neighborhood)
+nodeneighs<-nodes[which(nodes$person_id%in%c(seedneighs$person_id1,seedneighs$person_id2)),]
+
+#Renaming IDs for statnet
+levs<-levels(as.factor(unique(c(seedneighs$person_id1,seedneighs$person_id2))))
+seedneighs$person_id1<-as.numeric(factor(seedneighs$person_id1,levels=levs))
+seedneighs$person_id2<-as.numeric(factor(seedneighs$person_id2,levels=levs))
+nodeneighs$person_id_fac<-as.numeric(factor(nodeneighs$person_id,levels=levs))
+nodeneighs<-nodeneighs[order(nodeneighs$person_id_fac),]
+
+#convert to statnet
+net_neighborhood_sample<-as.network(seedneighs[,1:2],directed=F)
+for (i in 3:ncol(seedneighs)) set.edge.attribute(net_neighborhood_sample,names(seedneighs)[i],seedneighs[,i])
+for (i in 1:ncol(nodeneighs)) set.vertex.attribute(net_neighborhood_sample,names(nodeneighs)[i],nodeneighs[,i])
+
+#run model
+mod_neigh<-ergm(net_neighborhood_sample~edges)
+
+mod_neigh<-ergm(net_neighborhood_sample~edges+
+             nodematch("zipcode")+nodematch("household_id")+
+             nodecov("household_size")+absdiff("household_income",pow=.5)+
+             nodematch("worker")+nodecov("worker")+nodecov("household_vehicles"))
+
+ks.test((chk),degree(simulate(mod_neigh,nsim=1),gmode="graph"))
+
+plot(density(chk),ylim=c(0,.35),xlim=c(0,100),main="Degree Distribution Comparison",xlab="Degree")
+lines(density((degree(net_neighborhood_sample,gmode="graph"))),col="darkgray",lwd=2)
+for (i in 1:1) lines(density(degree(simulate(mod_neigh,nsim=1),gmode="graph")),col="purple")
+legend(30,.3,legend=c("NDSSL","Input Graph (Neighborhood Sample)","ERGM Simulation"),lwd=c(1,2,1),col=c(1,"darkgray","purple"))
+
+```
+
+Here, we already see the benefit of including more structure in the network model: we get much closer to the "true" degree distribution in the full network. Still, however, it is off, as shown by the K-S statistic and p-value, as well as eyeballing the plot comparing the kernel densities of degree. 
+
+One thing we can try is to change the parameterization to include "triangles." In friendship networks, for example, the number of shared friends between two nodes is related to their own probability of being friends -- "a friend of a friend is my friend." As the number of shared partners increases, there are usually diminishing returns, i.e., going from no shared  friends to one shared friend is a bigger gain on the probaility of a realized edge than from 1 shared friend to 2 shared friends. To account for this, we can use geometrically weighted edgewise shared partners (gwesp), which uses a decay parameter corresponding to the diminishing returns that each additional shared partner adds to the probaility that a tie will be present. We try it with a starting decay parameter '2', meaning the added benefit of each additional shared partner decreases the gain of in the likelihood of an edge by 1/2. The ERGM will automatically vary this parameter to try to find the optimum decay parameter ot use to explain the input graph. 
+
+```{r mod_neigh2}
+#run model
+if(1==2){ #don't run; takes too long
+mod_neigh2<-ergm(net_neighborhood_sample~edges+
+             nodematch("zipcode")+nodematch("household_id")+
+             nodecov("household_size")+absdiff("household_income",pow=.5)+
+             nodematch("worker")+nodecov("worker")+nodecov("household_vehicles")+  gwesp(decay = 2))
+save(mod_neigh2,file="mod_neigh2.Rdata")
+}
+load("mod_neigh2.Rdata")
+summary(mod_neigh2)
+
+ks.test((chk),degree(simulate(mod_neigh2,nsim=1),gmode="graph"))
+
+plot(density(chk),ylim=c(0,.1),xlim=c(0,100),main="Degree Distribution Comparison",xlab="Degree")
+lines(density((degree(net_neighborhood_sample,gmode="graph"))),col="darkgray",lwd=2,lty=2)
+for (i in 1:1) lines(density(degree(simulate(mod_neigh2,nsim=1),gmode="graph")),col="purple")
+legend(70,.1,legend=c("NDSSL","Input Graph (Neighborhood Sample)","ERGM Simulation"),lwd=c(1,2,1),lty=c(1,2,1),col=c(1,"darkgray","purple"))
+
+```
+
+We're still not quite there in terms of getting the degree distribution correct. Also note that household ID now has no significant effect due to a large standard error. There's a big bump in density of degree around the 30 mark that we don't see in the true network. The model seems to be overestimating the degree of many of our nodes, possibly because we don't observe the true potential edge set of the alters of our initial sample, resulting in our model overestimating the tendency to which edges form in the network. We can plot a few networks to see if this is in fact the case:
+
+
+```{r gplot}
+par(mfrow=c(4,3),mar=c(0,0,0,0))
+seeds<-sample(nodes$person_id,12) #seed sample
+seednets<-mclapply(seeds, function(x) edgeatts[which(edgeatts$person_id1%in%x | edgeatts$person_id2%in%x),],mc.cores=4)
+
+seednets_neighborhood<-mclapply(seednets,function(x) {
+  seed_endpts<-unique(c(x$person_id1,x$person_id2)) #grab all nodes in edgelist
+  ind<-cbind((edgeatts[,1]%in%seed_endpts),(edgeatts[,2]%in%seed_endpts)) #index edges where both endpoints include a node above 
+  ind<-which(rowSums(ind)==2) #index edges where both endpoints include a node above 
+  edgeatts[ind,]
+},mc.cores=4
+)
+
+par(mfrow=c(4,3),mar=c(0,0,0,0))
+for (i in 1:12){
+levs<-levels(as.factor(unique(c(seednets_neighborhood[[i]]$person_id1,seednets_neighborhood[[i]]$person_id2))))
+gplot(as.network(cbind(as.numeric(factor(seednets_neighborhood[[i]][[1]],levels=levs)),as.numeric(factor(seednets_neighborhood[[i]][[2]],levels=levs))),gmode="graph"),edge.col=c("purple","darkred","lightgray")[c(as.numeric(as.factor(seednets_neighborhood[[i]]$activity1)))],usearrows=F,vertex.border="white")
+}
+
+
+```
+
+In the plots above, edges are colored according to edge purpose. Here, we can see that many egos (in the center of each plot) make their way through a series of complete networks throughout the day, i.e., a home, workplace, place of commerce, and/or other setting where every node is connected to every other node. Otherwise, nodes are not that connected. An ERGM model, which is trying to find averages for each parameter, might have trouble finding a single number for the occurrence of triangles across the entire network. One solution is to include a parameter that represents the tendency for those with only *one* shared partner to (not) form a tie. This might help the model to produce networks with heavily connected social settings but keeps between-setting ties at a minimum. The dsp(1) parameter identifies edge variables with only one shared partner, separately estimating that parameters apart from the rest of the triangles (estimated by gwesp). 
+
+This could explains why household ID wouldn't matter in the final model -- the triangle term consumes all of its explanatory power (since household members are necessarily part of all possible triangles in their household). In order to counteract this in cases where there are only two-person households, let's set as fixed the parameter coeficient for household ID match: 
+
+```{r mod_neigh}
+
+#run model
+if(1==2){
+mod_neigh3<-ergm(net_neighborhood_sample~edges+
+             nodematch("zipcode")+offset(nodematch("household_id"))+
+             nodecov("household_size")+absdiff("household_income",pow=.5)+
+             nodematch("worker")+nodecov("worker")+nodecov("household_vehicles")+ dsp(1) + gwesp(decay = 2),offset.coef=10)
+
+save(mod_neigh3,file="mod_neigh3.Rdata")
+}
+load("mod_neigh3.Rdata")
+ks.test((chk),degree(simulate(mod_neigh3,nsim=1),gmode="graph"))
+
+plot(density(chk),ylim=c(0,.1),xlim=c(0,100),main="Degree Distribution Comparison",xlab="Degree")
+lines(density((degree(net_neighborhood_sample,gmode="graph"))),col="darkgray",lwd=2,lty=2)
+for (i in 1:1) lines(density(degree(simulate(mod_neigh3,nsim=1),gmode="graph")),col="purple")
+legend(50,.1,legend=c("NDSSL","Input Graph (Neighborhood Sample)","ERGM Simulation"),lwd=c(1,2,1),lty=c(1,2,1),col=c(1,"darkgray","purple"))
+
+
+```
+
+The model still did not converge, and we still have issues with degree distribution matching the imput graph but not the full network. 
+
+We are asking the model to produce graphs in a rather unnatural way, namely by ignoring the entire edge structure of our sample's alters. Alters of our egos are often seen to be a part of complete subgraphs, and are not a part of any tie that doesn't close a triangle (other than the sample egos). Since we have complete network-ecologies of the seed nodes, we could ask ERGM to consider only the connections between seed nodes. However, with only 100 seed nodes, the ties in-between those 100 nodes cannot represent the structure of the entire network. For example, there is a very, very, small chance that we sample two members of the same household, so the relationship between household membership and tie formation cannot be established in the model. One alternative to this method is to use snowball sampling, which extracts the entire network information of a seed sample and their alters' networks. 
+
+## Snowball Sampling 
+
+A snowball sample selects a seed sample of nodes and then collects additional data in waves. In the first wave, we capture all ties to a seed node set. A second wave collects all nodes tied to all alters tied to the seed set. Thus, we not only get the complete network structure of seeds, but also of their alters. 
+
+When using a snowball sample in an ERGM, we can account for the sampling structure by using a few tricks (Stivala et al 2016). First, we count as fixed the edge variables in the outer-most wave, since we don't observe any further waves beyond that could account for those edges. We also hold constant at least one present edge variable in nodes between waves, to account for the fact that they arrived in our sample by nature of being connected to a node in the previous wave. Finally, we hold all ties from Wave 3 to Wave 2 constant, as we do not observe all of Wave 3's edge variables. So in this case, we only consider those ties that exist within-wave and between Waves 1 and 2 to estimate parameters. The idea is to only consider those edge variables where we have complete information on what could impact the edge being present or absert. The code for sampling in this way, and extracting the edges where we have complete information, is below. I also set household ties to be fixed in the model, since those are necessarily connected in the data.
+
+```{r snowball,include=T}
+
+ndssl_snowball_sampler<-function(x,degs_sep=2) {
+  seeds<-sample(nodes$person_id,5) #seed sample
+  nodes_wave<-data.frame(nodeID=seeds,wave=1)
+  
+  for (i in 1:degs_sep){
+    edgeatts_snow<-edgeatts[which(edgeatts$person_id1%in%nodes_wave$nodeID | edgeatts$person_id2%in%nodes_wave$nodeID),] #grab networks of new node set
+    nodes_snow<-unique(c(edgeatts_snow$person_id1,edgeatts_snow$person_id2)) #grab new nodes (connections to this wave)
+    newnodes<-nodes_snow[-which(nodes_snow%in%nodes_wave$nodeID)]
+    nodes_wave<-rbind(nodes_wave,data.frame(nodeID=newnodes,wave=i+1))
+    nodeatts_snow<-nodes[which(nodes$person_id%in%nodes_wave$nodeID),] #grab attributes of all nodes
+    
+  }
+  
+  #rename ids so as to not confuse statnet
+  levs<-levels(as.factor(unique(c(edgeatts_snow$person_id1,edgeatts_snow$person_id2)))) 
+  edgeatts_snow$person_id1<-as.numeric(factor(edgeatts_snow$person_id1,levels=levs))
+  edgeatts_snow$person_id2<-as.numeric(factor(edgeatts_snow$person_id2,levels=levs))
+  nodeatts_snow$person_id_fac<-as.numeric(factor(nodeatts_snow$person_id,levels=levs))
+  nodes_wave$nodeID<-as.numeric(factor(nodes_wave$nodeID,levels=levs))
+  nodeatts_snow<-nodeatts_snow[order(nodeatts_snow$person_id_fac),]
+  nodes_wave<-nodes_wave[order(nodes_wave$nodeID),]
+  net_snowball<-as.network(edgeatts_snow[,1:2],directed=F)
+  
+  #ERGM constraints 
+  #1 Fix all edges with endpoints to nodes captured in the outermost wave
+  edges_to_consider<-combn(nodes_wave$nodeID[nodes_wave$nodeID[which(nodes_wave$wave!=degs_sep+1)]],2)
+  edges_to_consider<-as.data.frame(t(edges_to_consider))
+  names(edges_to_consider)<-c("person1_id_fac","person2_id_fac")
+  
+  #2 Fix degree for Wave-2 Nodes to degree(wave2--wave3)+1 (to preserve sample selection into second wave)
+  edgeatts_temp<-edgeatts_snow[which(edgeatts_snow$person_id1%in%nodes_wave$nodeID[nodes_wave$wave!=1] & edgeatts_snow$person_id2%in%nodes_wave$nodeID[nodes_wave$wave!=1]),]
+  
+  gg<-table(c(edgeatts_temp$person_id1,edgeatts_temp$person_id2))
+  gg<-data.frame(person_id_fac=names(gg),degree_min=as.numeric(gg))
+  gg$degree_min[which(gg$person_id_fac%in%nodes_wave$nodeID[which(nodes_wave$wave==2)])]<-gg$degree_min[which(gg$person_id_fac%in%nodes_wave$nodeID[which(nodes_wave$wave==2)])]+1
+  
+  nodeatts_snow<-merge(nodeatts_snow,gg,all.x=T)
+  nodeatts_snow$degree_min[is.na(nodeatts_snow$degree_min)]<-1
+  
+  
+  #3 Fix Household Ties 
+  nodes_to_consider<-nodes_wave$nodeID[nodes_wave$nodeID[which(nodes_wave$wave!=degs_sep+1)]]
+  household_ids<-data.frame(person_id_fac=nodes_to_consider, household_id=nodeatts_snow$household_id[nodeatts_snow$person_id_fac%in%nodes_to_consider])
+  edges_to_consider<-merge(edges_to_consider,household_ids,by.x="person1_id_fac",by.y="person_id_fac")
+  edges_to_consider<-merge(edges_to_consider,household_ids,by.x="person2_id_fac",by.y="person_id_fac")
+  free.dyads<-as.edgelist(as.matrix(edges_to_consider[which(edges_to_consider$household_id.x!=edges_to_consider$household_id.y),1:2]),n=nrow(nodes_wave))
+  for (i in 3:ncol(edgeatts_snow)) set.edge.attribute(net_snowball,names(edgeatts_snow)[i],edgeatts_snow[,i])
+  for (i in 1:ncol(nodeatts_snow)) set.vertex.attribute(net_snowball,names(nodeatts_snow)[i],nodeatts_snow[,i])
+  
+  return(list(net_snowball=net_snowball,free.dyads=free.dyads,waves_n=table(nodes_wave$wave)))
+}
+
+res<-mclapply(1:2,ndssl_snowball_sampler,mc.cores=2)
+
+waves_n<-do.call(rbind.data.frame,lapply(res,function(x) x$waves_n))
+names(waves_n)<-c("Wave1","Wave2","Wave3")  
+waves_n
+
+
+```
+
+One thing to note is that in this network, snowball sampling scales very quickly. Since average degree is high, we can expect the number of nodes to scale by 20 times in each wave. Here, I use a very small seed sample of 5 to pull in ties. Because the seed sample size is so small, it may be difficult to get a representative sample of nodes in the network.
+
+Drawing from our lessons in neighborhood sampling, let's use a gwesp term and a control for having only one shared partner: 
+
+```{r snowball2,include=T}
+if(1==2){ #don't run here, just show
+
+
+results<-mclapply(res,function(x) {ergm(x$net_snowball~edges + nodematch("zipcode")+ absdiff("age", pow=1)+
+                                          nodecov("household_size")+absdiff("household_income")+ nodecov("worker")+ nodematch("worker")+
+                                          nodecov("household_vehicles")+ dsp(1) + gwesp(decay = 2),constraints = ~fixallbut(x$free.dyads) )
+},mc.cores=2)
+
+}
+
+```
+
+
+The model estimation procedure here became "stuck", suggesting bad paramterization. Alas -- the triangles have won against our efforts for a well-definied model. 
+
+## Potential Solutions 
+
+A longitudinal network model -- such as TERGM or DNR -- could be used to simulate a day-long NDSSL network that we later aggregate to a static model. Since most ties are triangles instantaneously, we could include that in the model while separating out the potential for a household tie to interact with nodes in a household member's work-contacts. Dynamic tie sampling is a well-known problem with some possible solutions available in the literature.
+
+Second, we could separate triangle terms by tie purpose. For example, an *i-j* tie with purpose "household" could be forced to not consider shared partners whose purpose is "work."
+
+Finally, we could consider the role of locations in some way, such as a node-level covariate for current location. Here we're approaching an agent-based model.
+
+There may also be some parameterization that may well work that I have not considered. I would like to work on this more, so hopefully some additional funding comes through another source to continue it. 
+
+## Conclusion 
+
+I got closer, but not quite, to reproducing the degree distribution of the NDSSL data using ergms. Because of the higher-than-average connectedness of the graph compared to other settings, snowball sampling scales very quickly. The formation of triangles in uneven ways assists in model failure, as the model has a difficult time creating heterogeneity it does not observe. All-in-all, the computational feasibility is one issue, but the most important issue here is to find the best way to parameterize the model in order to re-create the underlying network in reasonable ways. 
