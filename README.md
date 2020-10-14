@@ -26,7 +26,7 @@ conda create --name dgmnet
 conda activate dgmnet
 ```
 
-Next, install [Pytorch](https://pytorch.org/). The instructions for a CUDA 10.2 GPU is:
+Next, install Pytorch. The instructions for a CUDA 10.2 GPU is:
 
 ```
 conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
