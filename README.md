@@ -20,7 +20,7 @@ Please direct any questions to <hartnett@rand.org>.
 The workflows are coded in Python, and heavily utilize [*Pytorch*](https://pytorch.org/) and [*Pytorch Geometric*](https://pytorch-geometric.readthedocs.io/en/latest/). These will need to be installed, along with the many other packages that are used. We recommend installing within a conda environment:
 
 ```
-git clone https://code.rand.org/hartnett/dgmnet.git
+git clone https://github.com/randcorporation/dgmnet
 cd dgmnet
 conda create --name dgmnet
 conda activate dgmnet

@@ -17,7 +17,6 @@ requirements = [
     'seaborn',
     'jupyter',
     'ipykernel',
-    'torch',
     'networkx',
     'pyyaml'
 ]
