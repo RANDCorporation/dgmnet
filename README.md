@@ -26,7 +26,7 @@ conda create --name dgmnet
 conda activate dgmnet
 ```
 
-Next, install Pytorch. The instructions for a CUDA 10.2 GPU is:
+Next, [install Pytorch](https://pytorch.org/). The instructions for a CUDA 10.2 GPU is:
 
 ```
 conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
@@ -35,13 +35,15 @@ conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
 Then, install Pytorch Geometric:
 
 ```
-pip install torch-scatter==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.6.0.html
-pip install torch-sparse==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.6.0.html
-pip install torch-cluster==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.6.0.html
-pip install torch-spline-conv==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-1.6.0.html
+pip install torch-scatter==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-${TORCH}.html
+pip install torch-sparse==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-${TORCH}.html
+pip install torch-cluster==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-${TORCH}.html
+pip install torch-spline-conv==latest+${CUDA} -f https://pytorch-geometric.com/whl/torch-${TORCH}.html
 pip install torch-geometric
 ```
-where ${CUDA} should be replaced by either cpu, cu92, cu101 or cu102 depending on your PyTorch installation. Finally, install the other packages via:
+where ${CUDA} and ${TORCH} should be replaced by your specific CUDA version (cpu, cu92, cu101, cu102, cu110) and PyTorch version (1.4.0, 1.5.0, 1.6.0, 1.7.0), respectively.
+
+Finally, install the other packages via:
 ```
 python setup.py install
 ```
